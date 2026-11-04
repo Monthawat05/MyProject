@@ -1,0 +1,58 @@
+﻿import React,{useEffect,useRef,useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {onAuthStateChanged,signInWithEmailAndPassword,signOut} from 'firebase/auth';
+import {auth,persistenceReady} from './firebase';
+import './style.css';
+import FeaturedEditor from './FeaturedEditor';
+
+const date=v=>{if(!v)return '—';const d=new Date(v._seconds?v._seconds*1000:v);return isNaN(d)?'—':d.toLocaleString('th-TH',{dateStyle:'medium',timeStyle:'short'});};
+async function api(path,method='GET',body){
+ const token=await auth.currentUser?.getIdToken();
+ const response=await fetch('/api'+path,{method,headers:{Authorization:`Bearer ${token||''}`,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+ const data=await response.json().catch(()=>({error:'ติดต่อเซิร์ฟเวอร์ไม่ได้'}));
+ if(!response.ok)throw new Error(data.error||'เกิดข้อผิดพลาด');return data;
+}
+function App(){
+ const [admin,setAdmin]=useState(null),[checking,setChecking]=useState(true),[error,setError]=useState('');
+ const [users,setUsers]=useState([]),[page,setPage]=useState('dashboard'),[detail,setDetail]=useState(null);
+ const [loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[query,setQuery]=useState(''),[filter,setFilter]=useState('all');
+ const [confirmation,setConfirmation]=useState(null),[typed,setTyped]=useState(''),[notice,setNotice]=useState('');
+ const epoch=useRef(0),request=useRef(0);
+ useEffect(()=>onAuthStateChanged(auth,async user=>{
+   const current=++epoch.current;++request.current;setChecking(true);setAdmin(null);setUsers([]);setDetail(null);setConfirmation(null);setQuery('');setFilter('all');setNotice('');setLoading(false);setBusy(false);
+   if(!user){setChecking(false);return;}
+   try{await api('/me');if(current!==epoch.current)return;setAdmin(user);setPage('dashboard');}
+   catch(e){if(current!==epoch.current)return;setError(e.message);await signOut(auth);}
+   finally{if(current===epoch.current)setChecking(false);}
+ }),[]);
+ async function loadUsers(){const id=++request.current;setLoading(true);setError('');try{const data=await api('/users');if(id===request.current)setUsers(data);}catch(e){if(id===request.current)setError(e.message);}finally{if(id===request.current)setLoading(false);}}
+ useEffect(()=>{if(admin)loadUsers();},[admin]);
+ async function openUser(uid){const id=++request.current;setPage('detail');setDetail(null);setLoading(true);setError('');try{const data=await api('/users/'+encodeURIComponent(uid));if(id===request.current)setDetail(data);}catch(e){if(id===request.current)setError(e.message);}finally{if(id===request.current)setLoading(false);}}
+ async function login(e){e.preventDefault();setBusy(true);setError('');const f=new FormData(e.target);try{await persistenceReady;await signInWithEmailAndPassword(auth,f.get('email'),f.get('password'));}catch{setError('เข้าสู่ระบบไม่สำเร็จ กรุณาตรวจอีเมล รหัสผ่าน และการเชื่อมต่อ');}finally{setBusy(false);}}
+ async function logout(){++request.current;setError('');try{await signOut(auth);}catch{setError('ออกจากระบบไม่สำเร็จ กรุณาลองใหม่');}}
+ function confirm(action){setTyped('');setError('');setConfirmation(action);}
+ async function mutate(){
+   const c=confirmation,session=epoch.current;setBusy(true);setError('');
+   try{
+     const base='/users/'+encodeURIComponent(detail.uid);
+     if(c.type==='account')await api(base,'DELETE',{confirmUid:detail.uid});
+     if(c.type==='status')await api(base,'PATCH',{disabled:!detail.disabled});
+     if(c.type==='trip')await api(base+'/trips/'+encodeURIComponent(c.id),'DELETE',{confirmTripId:c.id});
+     if(session!==epoch.current)return;setConfirmation(null);setNotice('บันทึกการเปลี่ยนแปลงแล้ว');
+     if(c.type==='account'){setDetail(null);setPage('users');await loadUsers();}
+     else{await openUser(detail.uid);}
+   }catch(e){if(session===epoch.current)setError(e.message);}finally{if(session===epoch.current)setBusy(false);}
+ }
+ const filtered=users.filter(u=>(u.email+' '+u.displayName+' '+u.uid).toLowerCase().includes(query.toLowerCase())&&(filter==='all'||u.disabled===(filter==='disabled')));
+ const nav=p=>{if(busy)return;++request.current;setPage(p);setDetail(null);setNotice('');setError('');setLoading(false);if(p!=='featured')loadUsers();};
+ if(checking)return <div className="loading">กำลังตรวจสอบสิทธิ์ผู้ดูแล…</div>;
+ if(!admin)return <div className="login"><section className="welcome"><div className="brand">✈ TripAI <small>ADMIN</small></div><h1>ทุกการเดินทาง<br/>เริ่มจากการดูแลที่ดี</h1><p>จัดการผู้ใช้งานและแผนท่องเที่ยว<br/>ในพื้นที่สำหรับผู้ดูแลระบบ</p><div className="orb">✈</div></section><form onSubmit={login}><span className="eyebrow">ADMIN PORTAL</span><h2>ยินดีต้อนรับกลับ</h2><p className="muted">เข้าสู่ระบบด้วยบัญชีผู้ดูแล TripAI</p>{error&&<p role="alert" className="error">{error}</p>}<label>อีเมล<input name="email" type="email" autoComplete="username" required placeholder="admin@example.com"/></label><label>รหัสผ่าน<input name="password" type="password" autoComplete="current-password" required/></label><button disabled={busy}>{busy?'กำลังเข้าสู่ระบบ…':'เข้าสู่ระบบ →'}</button><p className="muted footnote">เฉพาะบัญชีที่ได้รับสิทธิ์ผู้ดูแลระบบเท่านั้น</p></form></div>;
+ return <div className="layout"><aside><div className="brand">✈ TripAI <small>ADMIN</small></div><p className="nav-label">WORKSPACE</p><button className={page==='dashboard'?'active':''} onClick={()=>nav('dashboard')} disabled={busy}>▦ Dashboard</button><button className={(page==='users'||page==='detail')?'active':''} onClick={()=>nav('users')} disabled={busy}>♙ รายชื่อผู้ใช้</button><button className={page==='featured'?'active':''} onClick={()=>nav('featured')} disabled={busy}>✦ ทริปแนะนำ</button><div className="sidebar-bottom"><span>TripAI Management</span><button onClick={logout} disabled={busy}>↪ ออกจากระบบ</button></div></aside><div className="workspace"><header><span>พื้นที่ผู้ดูแล / {page==='featured'?'ทริปแนะนำ':page==='dashboard'?'ภาพรวมระบบ':page==='users'?'ผู้ใช้งาน':'รายละเอียดผู้ใช้'}</span><div className="admin"><span className="avatar">A</span><div><strong>ผู้ดูแลระบบ</strong><small>{admin.email}</small></div></div></header><main><div className="page-heading"><div><span className="eyebrow">TRIPAI MANAGEMENT</span><h1>{page==='featured'?'ทริปแนะนำ':page==='dashboard'?'ภาพรวมระบบ':page==='users'?'รายชื่อผู้ใช้งาน':'รายละเอียดผู้ใช้งาน'}</h1><p className="muted">ดูแลบัญชีและแผนการเดินทางของผู้ใช้ TripAI</p></div><button className="secondary" hidden={page==='featured'} disabled={loading||busy||(page==='detail'&&!detail)} onClick={()=>page==='detail'?openUser(detail.uid):loadUsers()}>↻ รีเฟรช</button></div>{error&&<p role="alert" className="error">{error}</p>}{notice&&<p role="status" className="success">{notice}</p>}{loading?<div className="panel loading">กำลังโหลดข้อมูล…</div>:<>
+ {page==='featured'&&<FeaturedEditor api={api} onBusy={setBusy}/>} {page==='dashboard'&&<><div className="stats">{[['ผู้ใช้งานทั้งหมด',users.length,'บัญชี'],['บัญชีที่ใช้งานปกติ',users.filter(u=>!u.disabled).length,'บัญชี'],['ทริปของผู้ใช้ในระบบ',users.reduce((n,u)=>n+u.tripCount,0),'ทริป'],['บัญชีถูกระงับ',users.filter(u=>u.disabled).length,'บัญชี']].map(([label,value,unit])=><div className="stat" key={label}><span>{label}</span><strong>{value.toLocaleString()}</strong><small>{unit}</small></div>)}</div><div className="banner"><div><h2>ดูแลทุกทริปจากที่เดียว</h2><p>ตรวจสอบผู้ใช้งาน ดูแผนที่บันทึก และจัดการสถานะบัญชี</p></div><button onClick={()=>nav('users')}>ดูรายชื่อผู้ใช้ →</button></div></>}
+ {(page==='dashboard'||page==='users')&&<section className="panel"><div className="table-heading"><h2>{page==='dashboard'?'ผู้ใช้งานในระบบ':'ผู้ใช้งานทั้งหมด'} <span className="count">{filtered.length}</span></h2><div className="filters"><input aria-label="ค้นหาผู้ใช้" placeholder="ค้นหาอีเมล ชื่อ หรือ UID…" value={query} onChange={e=>setQuery(e.target.value)}/><select aria-label="กรองสถานะ" value={filter} onChange={e=>setFilter(e.target.value)}><option value="all">ทุกสถานะ</option><option value="active">ใช้งานปกติ</option><option value="disabled">ถูกระงับ</option></select></div></div><div className="table-scroll"><table><thead><tr><th>ผู้ใช้งาน / อีเมล</th><th>วันที่สมัคร</th><th>ทริปที่บันทึก</th><th>สถานะ</th><th></th></tr></thead><tbody>{filtered.map(u=><tr key={u.uid}><td><strong>{u.displayName||u.email||'ไม่ระบุอีเมล'}</strong>{u.displayName&&<small>{u.email}</small>}{u.admin&&<small>ผู้ดูแลระบบ</small>}</td><td>{date(u.createdAt)}</td><td>{u.tripCount} ทริป</td><td><Status disabled={u.disabled}/></td><td><button className="link" onClick={()=>openUser(u.uid)}>ดูรายละเอียด →</button></td></tr>)}</tbody></table>{!filtered.length&&<p className="empty">ไม่พบผู้ใช้งานที่ตรงกับเงื่อนไข</p>}</div></section>}
+ {page==='detail'&&detail&&<><button className="link" onClick={()=>nav('users')} disabled={busy}>← กลับรายชื่อผู้ใช้</button><section className="panel profile"><div><h2>{detail.profile?.displayName||detail.displayName||detail.email}</h2><p>{detail.email}</p><Status disabled={detail.disabled}/><dl><dt>รหัสผู้ใช้</dt><dd>{detail.uid}</dd><dt>วันที่สมัคร</dt><dd>{date(detail.createdAt)}</dd><dt>เข้าสู่ระบบล่าสุด</dt><dd>{date(detail.lastSignIn)}</dd></dl></div><div className="actions"><button className="secondary" disabled={busy||detail.admin||detail.uid===admin.uid} onClick={()=>confirm({type:'status',title:detail.disabled?'เปิดใช้งานบัญชีอีกครั้ง':'ระงับบัญชีผู้ใช้',text:detail.disabled?'ผู้ใช้จะสามารถเข้าสู่ระบบได้อีกครั้ง':'ผู้ใช้จะถูกระงับการเข้าสู่ระบบ เซสชันเดิมอาจใช้ได้จนกว่า token จะหมดอายุ'})}>{detail.disabled?'เปิดใช้งาน':'ระงับบัญชี'}</button><button className="danger" disabled={busy||detail.admin||detail.uid===admin.uid} onClick={()=>confirm({type:'account',title:'ลบบัญชีถาวร',text:'ต้องลบทริปให้หมดก่อน บัญชี Authentication จะถูกลบถาวร ข้อมูลเสริมใน users จะยังเก็บไว้ พิมพ์ UID เพื่อยืนยัน'})}>ลบบัญชีถาวร</button></div></section><h2>ทริปที่บันทึกไว้ <span className="count">{detail.trips.length}</span></h2><div className="trip-grid">{detail.trips.map(t=><article className="panel trip" key={t.id}><div className="trip-title"><h3>⌖ {t.destination||'ไม่ระบุจุดหมาย'}</h3><button className="danger small" disabled={busy} onClick={()=>confirm({type:'trip',id:t.id,title:'ลบทริปนี้?',text:`ลบทริป ${t.destination||''} ถาวร ไม่สามารถกู้คืนได้`})}>ลบทริป</button></div><p className="muted">{t.days} วัน · {t.travelers} คน · งบ {t.budget} บาท</p><p>วันเดินทาง: {t.startDate||'ยังไม่ระบุ'}</p><details><summary>ดูแผนการเดินทาง</summary><pre>{t.itinerary||'ไม่มีรายละเอียด'}</pre></details></article>)}</div>{!detail.trips.length&&<p className="panel empty">ยังไม่มีทริปที่บันทึกไว้</p>}</>}
+ </>}</main></div>{confirmation&&<div className="overlay"><section role="dialog" aria-modal="true" aria-labelledby="confirm-title" className="modal"><h2 id="confirm-title">{confirmation.title}</h2><p>{confirmation.text}</p>{error&&<p role="alert" className="error">{error}</p>}{confirmation.type==='account'&&<><code>{detail.uid}</code><input aria-label="UID ยืนยันการลบ" value={typed} onChange={e=>setTyped(e.target.value)} placeholder="พิมพ์ UID ของผู้ใช้"/></>}<div className="actions"><button autoFocus className="secondary" disabled={busy} onClick={()=>setConfirmation(null)}>ยกเลิก</button><button className="danger" disabled={busy||(confirmation.type==='account'&&typed!==detail.uid)} onClick={mutate}>{busy?'กำลังดำเนินการ…':'ยืนยัน'}</button></div></section></div>}</div>;
+}
+function Status({disabled}){return <span className={'badge '+(disabled?'disabled':'enabled')}>● {disabled?'ถูกระงับ':'ใช้งานปกติ'}</span>;}
+createRoot(document.getElementById('root')).render(<App/>);
+
